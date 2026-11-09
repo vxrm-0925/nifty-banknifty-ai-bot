@@ -67,7 +67,7 @@ def send_telegram(message):
         return True, "Telegram message sent successfully."
 
     except Exception as exc:
-        return False, f"Telegram error: {
+        return False, f"Telegram error: {exc}"
 # ==============================
 # TELEGRAM COMMAND LISTENER
 # ==============================
