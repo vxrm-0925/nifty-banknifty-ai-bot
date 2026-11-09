@@ -67,12 +67,37 @@ def send_telegram(message):
         return True, "Telegram message sent successfully."
 
     except Exception as exc:
-        return False, f"Telegram error: {exc}"
-
-
+        return False, f"Telegram error: {
 # ==============================
 # TELEGRAM COMMAND LISTENER
 # ==============================
+
+def check_telegram(token):
+    base_url = f"https://api.telegram.org/bot{token}"
+
+    try:
+        me = requests.get(base_url + "/getMe", timeout=10).json()
+        webhook = requests.get(
+            base_url + "/getWebhookInfo", timeout=10
+        ).json()
+
+        if not me.get("ok"):
+            return False, "Telegram token invalid. Check your Secrets."
+
+        bot_name = me["result"].get("username", "Unknown")
+        webhook_url = webhook.get("result", {}).get("url", "")
+
+        if webhook_url:
+            return False, (
+                f"Bot @{bot_name} is valid, but a webhook is active. "
+                "Polling cannot run until the webhook is removed."
+            )
+
+        return True, f"Bot connected: @{bot_name}"
+
+    except Exception as exc:
+        return False, f"Telegram connection error: {exc}"
+
 
 @st.cache_resource
 def start_telegram_listener(token, allowed_chat):
@@ -81,101 +106,68 @@ def start_telegram_listener(token, allowed_chat):
         offset = None
         base_url = f"https://api.telegram.org/bot{token}"
 
+        print("Telegram listener started.")
+
         while True:
             try:
+                params = {"timeout": 25}
+                if offset is not None:
+                    params["offset"] = offset
+
                 response = requests.get(
                     base_url + "/getUpdates",
-                    params={
-                        "offset": offset,
-                        "timeout": 25
-                    },
+                    params=params,
                     timeout=35
                 )
-
                 response.raise_for_status()
                 data = response.json()
 
                 if not data.get("ok"):
+                    print("Telegram API error:", data)
                     time.sleep(5)
                     continue
 
                 for update in data.get("result", []):
-
                     offset = update["update_id"] + 1
 
                     message = update.get("message", {})
                     chat = message.get("chat", {})
                     chat_id = str(chat.get("id", ""))
+                    msg = message.get("text", "").strip()
 
-                    text = message.get("text", "").strip()
-
-                    if not text:
+                    if not msg:
                         continue
 
                     if chat_id != allowed_chat:
+                        print("Telegram message ignored: chat ID mismatch.")
                         continue
 
-                    command = text.split()[0].lower().split("@")[0]
+                    command = msg.split()[0].lower().split("@")[0]
 
                     replies = {
-                        "/start": (
-                            "Welcome to Nifty BankNifty AI Bot! 🚀\n\n"
-                            "Your Telegram bot is connected.\n"
-                            "Send /help to see available commands.\n"
-                            "Paper trading only."
-                        ),
-
-                        "/help": (
-                            "📈 AVAILABLE COMMANDS\n\n"
-                            "/start - Welcome message\n"
-                            "/help - Commands list\n"
-                            "/status - Bot connection status\n"
-                            "/nifty - Nifty analysis information\n"
-                            "/banknifty - Bank Nifty analysis information\n\n"
-                            "Upload CSV data on the Streamlit dashboard "
-                            "to calculate indicators and signals."
-                        ),
-
-                        "/status": (
-                            "✅ TELEGRAM CONNECTION ACTIVE\n\n"
-                            "Bot: Online while app process is running\n"
-                            "Mode: Paper Trading\n"
-                            "Live market feed: Not configured\n"
-                            "Automatic real orders: Disabled"
-                        ),
-
-                        "/nifty": (
-                            "📊 NIFTY 50\n\n"
-                            "Upload NIFTY OHLCV CSV data in the "
-                            "Streamlit dashboard to calculate its "
-                            "latest rule-based signal.\n\n"
-                            "No live market signal is available yet."
-                        ),
-
-                        "/banknifty": (
-                            "📊 BANK NIFTY\n\n"
-                            "Upload BANKNIFTY OHLCV CSV data in the "
-                            "Streamlit dashboard to calculate its "
-                            "latest rule-based signal.\n\n"
-                            "No live market signal is available yet."
-                        )
+                        "/start": "Welcome! Telegram bot connected successfully. Send /help.",
+                        "/help": "Commands: /start, /help, /status, /nifty, /banknifty",
+                        "/status": "Bot is online. Paper trading only. Live market feed is not configured.",
+                        "/nifty": "NIFTY: Upload CSV on the Streamlit dashboard for analysis. No live signal available.",
+                        "/banknifty": "BANKNIFTY: Upload CSV on the Streamlit dashboard for analysis. No live signal available."
                     }
 
                     reply = replies.get(
                         command,
-                        "Unknown command. Send /help to see available commands."
+                        "Unknown command. Send /help."
                     )
 
-                    requests.post(
+                    sent = requests.post(
                         base_url + "/sendMessage",
-                        json={
-                            "chat_id": chat_id,
-                            "text": reply
-                        },
+                        json={"chat_id": chat_id, "text": reply},
                         timeout=15
                     )
+                    sent.raise_for_status()
 
-            except Exception:
+                    print("Telegram reply sent for:", command)
+
+            except Exception as exc:
+                print("TELEGRAM LISTENER ERROR:", repr(exc))
                 time.sleep(5)
 
     thread = threading.Thread(
@@ -183,7 +175,6 @@ def start_telegram_listener(token, allowed_chat):
         daemon=True,
         name="TelegramListener"
     )
-
     thread.start()
     return True
 
@@ -191,7 +182,16 @@ def start_telegram_listener(token, allowed_chat):
 token, allowed_chat = get_telegram_config()
 
 if token and allowed_chat:
-    start_telegram_listener(token, allowed_chat)
+    ok, status = check_telegram(token)
+
+    if ok:
+        st.success(status)
+        start_telegram_listener(token, allowed_chat)
+    else:
+        st.error(status)
+else:
+    st.error("Telegram credentials missing. Check Streamlit Secrets.")
+
 
 
 # ==============================
